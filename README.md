@@ -2,7 +2,7 @@ Combining on-chain analytics and basic ML algos on various time-series crypto da
 
 # Data pipeline architecture #
 
-[Raw Data Sources]
+<!-- [Raw Data Sources]
     ↓ Dune/Glassnode API    CoinGecko API     Social Media API/Scraper
     ↓                      ↓                  ↓
 [Data Ingestion Scripts]   → Combine → [Feature Engineering Module]
@@ -13,7 +13,7 @@ Combining on-chain analytics and basic ML algos on various time-series crypto da
                                     ↓
                         [Prediction & Screening Service]
                                     ↓
-                          [Dashboard / Alerts System]
+                          [Dashboard / Alerts System] -->
 
 Phase 1: Planning & Data Collection
 Define key objectives, target coins, and success metrics (e.g., identifying coins surviving pump-and-dumps).
