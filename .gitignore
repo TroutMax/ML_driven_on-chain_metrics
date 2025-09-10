@@ -23,4 +23,7 @@ env/
 *.db
 *.sqlite
 *.txt
+*.json
+*.parquet
+*.pkl
 
