@@ -22,4 +22,5 @@ env/
 *.h5
 *.db
 *.sqlite
+*.txt
 
