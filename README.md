@@ -266,8 +266,6 @@ statsmodels>=0.13.0     # Time series analysis
 
 ---
 
-**⚠️ Disclaimer**: This is for educational and research purposes. Cryptocurrency trading involves significant risk.
-
 <!-- [Raw Data Sources]
     ↓ Dune/Glassnode API    CoinGecko API     Social Media API/Scraper
     ↓                      ↓                  ↓
