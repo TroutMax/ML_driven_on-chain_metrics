@@ -1,0 +1,25 @@
+# Python cache and environment
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+
+# Environment/config files
+.env
+
+# Data files
+*.csv
+*.tsv
+*.xls
+*.xlsx
+*.h5
+*.db
+*.sqlite
+
