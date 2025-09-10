@@ -148,6 +148,31 @@ import ta
 # Time Series
 from statsmodels.tsa.arima.model import ARIMA
 ```
+# Data Directory Structure
+
+## Raw Data
+- `raw/dune/`: Raw blockchain data from Dune Analytics
+- `raw/hyperliquid/`: Raw DEX data from Hyperliquid
+- `raw/backup/`: Critical dataset backups
+
+## Processed Data  
+- `processed/daily/`: Daily aggregated metrics
+- `processed/hourly/`: Hourly features for real-time analysis
+- `processed/features/`: ML-ready feature datasets
+
+## Cache & Temporary
+- `cache/`: Temporary processing files
+- `cache/api_responses/`: Cached API calls (1-hour TTL)
+
+## Models & Outputs
+- `models/`: Trained ML models and scalers
+- `exports/`: Clean datasets for sharing
+- `metadata/`: Data schemas and quality reports
+
+## File Naming Convention
+- Raw: `{source}_{dataset}_{YYYYMMDD_HHMMSS}.parquet`
+- Processed: `{feature_type}_{timeframe}_{YYYYMMDD}.parquet`
+- Models: `{model_type}_{version}_{YYYYMMDD}.pkl`
 
 ### ML Signal Ideas (see `ideas.txt`)
 1. **Volume Anomaly Detection** - Identify unusual trading patterns

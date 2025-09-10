@@ -2,166 +2,149 @@
 Hyperliquid API Client
 """
 
-import time
+from typing import Dict, Optional, List
 import pandas as pd
-from typing import Dict, Any, Optional, List
+from datetime import datetime
 from .base import BaseDataProvider
 
 class HyperliquidProvider(BaseDataProvider):
-    """Hyperliquid exchange data provider"""
+    """
+    Hyperliquid DEX data provider
+    Access to perpetual futures data, funding rates, and trading data
+    """
     
     def __init__(self, api_key: Optional[str] = None):
-        # Hyperliquid typically has higher rate limits
-        super().__init__(api_key=api_key, rate_limit=100)  # 100 requests per minute
-        
-        # Hyperliquid endpoints
-        self.base_url = "https://api.hyperliquid.xyz"
-        self.endpoints = {
-            'info': '/info',
-            'meta': '/info/meta',
-            'userFills': '/info/userFills',
-            'candlestick': '/info/candlestick',
-            'recentTrades': '/info/recentTrades',
-            'userOpenOrders': '/info/openOrders',
-            'userState': '/info/userState',
-            'funding': '/info/funding',
-            'levels': '/info/levels'
-        }
+        # Hyperliquid public data doesn't require API key
+        super().__init__(api_key=api_key, rate_limit=100)  # Conservative rate limit
     
     def _get_auth_headers(self) -> Dict[str, str]:
-        """Hyperliquid auth headers - update based on their auth requirements"""
-        headers = {'Content-Type': 'application/json'}
-        if self.api_key:
-            headers['Authorization'] = f'Bearer {self.api_key}'
-        return headers
+        """Hyperliquid public endpoints don't require auth"""
+        return {'Content-Type': 'application/json'}
     
     def _get_base_url(self) -> str:
-        return self.base_url
+        return "https://api.hyperliquid.xyz"
     
-    def get_market_data(self, symbol: str = "ETH", interval: str = "1h", 
-                       start_time: Optional[int] = None, end_time: Optional[int] = None) -> pd.DataFrame:
-        """Get candlestick market data"""
-        params = {
-            "coin": symbol,
-            "interval": interval
-        }
+    def get_market_data(self, symbol: str = 'ETH', interval: str = '1h') -> pd.DataFrame:
+        """
+        Get OHLCV market data for a symbol
         
-        if start_time:
-            params["startTime"] = start_time
-        if end_time:
-            params["endTime"] = end_time
-        
-        response = self._make_request('GET', self.endpoints['candlestick'], params=params)
-        
-        if response and isinstance(response, list):
-            df = pd.DataFrame(response)
-            if not df.empty:
-                # Standard OHLCV column naming
-                df.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
-                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-                df = df.set_index('timestamp')
-                
-                # Convert to numeric
-                numeric_cols = ['open', 'high', 'low', 'close', 'volume']
-                for col in numeric_cols:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
-                    
+        Args:
+            symbol: Trading symbol (e.g., 'ETH', 'BTC')
+            interval: Time interval ('1m', '5m', '1h', '1d')
+        """
+        try:
+            # Hyperliquid candlestick endpoint
+            payload = {
+                "type": "candleSnapshot",
+                "req": {
+                    "coin": symbol,
+                    "interval": interval,
+                    "startTime": int((datetime.now().timestamp() - 86400) * 1000)  # Last 24h
+                }
+            }
+            
+            response = self._make_request('POST', '/info', data=payload)
+            
+            if not response or 'data' not in response:
+                return pd.DataFrame()
+            
+            # Convert to DataFrame
+            df = pd.DataFrame(response['data'])
+            
+            if df.empty:
+                return df
+            
+            # Standardize column names
+            df.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+            
+            # Convert timestamp from milliseconds
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            
+            # Convert price/volume columns to numeric
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+            # Set timestamp as index
+            df = df.set_index('timestamp')
+            
             return df
-        
-        return pd.DataFrame()
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get market data for {symbol}: {e}")
+            return pd.DataFrame()
     
-    def get_user_fills(self, user_address: str, start_time: Optional[int] = None) -> pd.DataFrame:
-        """Get user trading history"""
-        params = {"user": user_address}
-        if start_time:
-            params["startTime"] = start_time
-        
-        response = self._make_request('POST', self.endpoints['userFills'], 
-                                    json_data=params)
-        
-        if response:
-            df = pd.DataFrame(response)
-            if not df.empty:
-                # Convert timestamp columns
-                if 'time' in df.columns:
-                    df['time'] = pd.to_datetime(df['time'], unit='ms')
-                    
-                # Convert numeric columns
-                numeric_cols = ['px', 'sz', 'fee']
-                for col in numeric_cols:
-                    if col in df.columns:
-                        df[col] = pd.to_numeric(df[col], errors='coerce')
-                        
+    def get_funding_rates(self, symbol: str = 'ETH') -> pd.DataFrame:
+        """Get funding rate data for perpetual futures"""
+        try:
+            payload = {
+                "type": "funding",
+                "coin": symbol
+            }
+            
+            response = self._make_request('POST', '/info', data=payload)
+            
+            if not response:
+                return pd.DataFrame()
+            
+            # Convert to DataFrame
+            df = pd.DataFrame([response])
+            df['timestamp'] = pd.to_datetime(datetime.now())
+            df['symbol'] = symbol
+            
             return df
-        
-        return pd.DataFrame()
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get funding rates for {symbol}: {e}")
+            return pd.DataFrame()
     
-    def get_user_state(self, user_address: str) -> Dict[str, Any]:
-        """Get current user state (positions, balances, etc.)"""
-        params = {"user": user_address}
-        
-        response = self._make_request('POST', self.endpoints['userState'], 
-                                    json_data=params)
-        return response or {}
-    
-    def get_funding_rates(self, coin: str = "ETH") -> pd.DataFrame:
-        """Get funding rate history"""
-        params = {"coin": coin}
-        
-        response = self._make_request('POST', self.endpoints['funding'], 
-                                    json_data=params)
-        
-        if response:
-            df = pd.DataFrame(response)
-            if not df.empty and 'time' in df.columns:
-                df['time'] = pd.to_datetime(df['time'], unit='ms')
-                if 'fundingRate' in df.columns:
-                    df['fundingRate'] = pd.to_numeric(df['fundingRate'], errors='coerce')
+    def get_recent_trades(self, symbol: str = 'ETH', limit: int = 100) -> pd.DataFrame:
+        """Get recent trades for a symbol"""
+        try:
+            payload = {
+                "type": "recentTrades",
+                "coin": symbol
+            }
+            
+            response = self._make_request('POST', '/info', data=payload)
+            
+            if not response:
+                return pd.DataFrame()
+            
+            # Convert to DataFrame
+            df = pd.DataFrame(response[:limit])  # Limit results
+            
+            if df.empty:
+                return df
+            
+            # Standardize columns
+            if 'time' in df.columns:
+                df['timestamp'] = pd.to_datetime(df['time'], unit='ms')
+            
             return df
-        
-        return pd.DataFrame()
-    
-    def get_order_book(self, coin: str = "ETH") -> Dict[str, Any]:
-        """Get current order book levels"""
-        params = {"coin": coin}
-        
-        response = self._make_request('POST', self.endpoints['levels'], 
-                                    json_data=params)
-        return response or {}
-    
-    def get_recent_trades(self, coin: str = "ETH") -> pd.DataFrame:
-        """Get recent trades"""
-        params = {"coin": coin}
-        
-        response = self._make_request('POST', self.endpoints['recentTrades'], 
-                                    json_data=params)
-        
-        if response:
-            df = pd.DataFrame(response)
-            if not df.empty:
-                if 'time' in df.columns:
-                    df['time'] = pd.to_datetime(df['time'], unit='ms')
-                    
-                numeric_cols = ['px', 'sz']
-                for col in numeric_cols:
-                    if col in df.columns:
-                        df[col] = pd.to_numeric(df[col], errors='coerce')
-                        
-            return df
-        
-        return pd.DataFrame()
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get recent trades for {symbol}: {e}")
+            return pd.DataFrame()
     
     def validate_connection(self) -> bool:
-        """Test Hyperliquid API connection"""
+        """Test if Hyperliquid API is accessible"""
         try:
-            # Try to fetch meta info (public endpoint)
-            response = self._make_request('GET', self.endpoints['meta'])
-            return response is not None
-        except Exception as e:
-            self.logger.error(f"Hyperliquid connection validation failed: {e}")
+            # Try to get market data for ETH
+            df = self.get_market_data('ETH')
+            return not df.empty
+        except:
             return False
     
-    def get_all_coins_info(self) -> Dict[str, Any]:
-        """Get information about all available coins"""
-        response = self._make_request('GET', self.endpoints['meta'])
-        return response or {}
+    def get_available_symbols(self) -> List[str]:
+        """Get list of available trading symbols"""
+        try:
+            payload = {"type": "meta"}
+            response = self._make_request('POST', '/info', data=payload)
+            
+            if response and 'universe' in response:
+                return [asset['name'] for asset in response['universe']]
+            
+            return ['ETH', 'BTC']  # Fallback
+            
+        except:
+            return ['ETH', 'BTC']  # Fallback
