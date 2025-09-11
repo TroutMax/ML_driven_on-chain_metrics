@@ -79,130 +79,204 @@ class HyperliquidProvider(BaseDataProvider):
             self.logger.error(f"Failed to get mid prices: {e}")
             return pd.DataFrame()
     
-    def get_market_data(self, symbol: str, interval: str = '1h', lookback_hours: int = 24) -> pd.DataFrame:
+    def get_market_data(self, symbol: str, interval: str = '1h', lookback_hours: int = 24, start_time: Optional[datetime] = None, end_time: Optional[datetime] = None) -> pd.DataFrame:
         """
-        Get OHLCV candlestick data
+        Get OHLCV market data for a symbol with flexible time parameters
         
         Args:
-            symbol: Trading symbol (e.g., 'ETH', 'BTC', 'HYPE')
+            symbol: Trading symbol (e.g., 'ETH', 'BTC')
             interval: Time interval ('1m', '5m', '15m', '1h', '4h', '1d')
-            lookback_hours: Hours of historical data to fetch
-        
-        Returns:
-            pandas.DataFrame: OHLCV data with datetime index
+            lookback_hours: How many hours back to fetch (ignored if start_time/end_time provided)
+            start_time: Specific start datetime (optional)
+            end_time: Specific end datetime (optional, defaults to now)
             
-        API Response Format (corrected):
-        - t: Start timestamp (Unix timestamp in milliseconds)
-        - T: End timestamp (Unix timestamp in milliseconds)
-        - s: Symbol (Trading pair or coin symbol)
-        - i: Interval (Time interval of the candle)
-        - o: Open price
-        - c: Close price
-        - h: High price
-        - l: Low price
-        - v: Volume
-        - n: Number of trades
+        Returns:
+            DataFrame with columns: datetime, open, high, low, close, volume, symbol, trades
         """
         try:
-            # Validate symbol parameter
-            if not symbol:
-                self.logger.error("Symbol parameter is required")
-                return pd.DataFrame()
+            # Validate interval
+            valid_intervals = ['1m', '5m', '15m', '1h', '4h', '1d']
+            if interval not in valid_intervals:
+                self.logger.warning(f"Interval {interval} not validated. Supported: {valid_intervals}")
             
-            # Calculate start time (in milliseconds)
-            start_time = int((datetime.now() - timedelta(hours=lookback_hours)).timestamp() * 1000)
+            # Calculate timestamps
+            if start_time and end_time:
+                # Use provided datetime range
+                start_ts = int(start_time.timestamp() * 1000)
+                end_ts = int(end_time.timestamp() * 1000)
+                self.logger.info(f"Using custom time range: {start_time} to {end_time}")
+            elif start_time:
+                # Start time provided, end time is now
+                start_ts = int(start_time.timestamp() * 1000)
+                end_ts = int(datetime.now().timestamp() * 1000)
+                self.logger.info(f"Using start time: {start_time} to now")
+            else:
+                # Use lookback_hours from now
+                end_ts = int(datetime.now().timestamp() * 1000)
+                start_ts = int((datetime.now() - timedelta(hours=lookback_hours)).timestamp() * 1000)
+                self.logger.info(f"Using lookback: {lookback_hours} hours")
             
+            # Validate lookback period (Hyperliquid has limits)
+            max_lookback_hours = self._get_max_lookback_hours(interval)
+            actual_hours = (end_ts - start_ts) / (1000 * 3600)
+            
+            if actual_hours > max_lookback_hours:
+                self.logger.warning(f"Requested {actual_hours:.1f}h exceeds max {max_lookback_hours}h for {interval}. Adjusting...")
+                start_ts = end_ts - (max_lookback_hours * 3600 * 1000)
+            
+            # Request payload
             payload = {
                 "type": "candleSnapshot",
                 "req": {
                     "coin": symbol,
                     "interval": interval,
-                    "startTime": start_time
+                    "startTime": int(start_ts),
+                    "endTime": int(end_ts)
                 }
             }
             
-            self.logger.info(f"Requesting {symbol} {interval} data from {start_time}")
-            response = self._make_info_request(payload)
+            self.logger.info(f"Fetching {symbol} market data: {interval} interval, {actual_hours:.1f}h period")
             
-            if not response:
-                self.logger.warning(f"Empty response for {symbol}")
-                return pd.DataFrame()
+            # Make API request
+            response = requests.post(f"{self.base_url}/info", json=payload, timeout=30)
+            response.raise_for_status()
             
-            # Response is a list of dictionaries
-            if not isinstance(response, list):
-                self.logger.error(f"Unexpected response format: {type(response)}")
-                return pd.DataFrame()
+            data = response.json()
             
-            if len(response) == 0:
-                self.logger.warning(f"No data in response for {symbol}")
+            if not data or len(data) == 0:
+                self.logger.warning(f"No market data returned for {symbol} ({interval})")
                 return pd.DataFrame()
             
             # Convert to DataFrame
-            df = pd.DataFrame(response)
+            df = pd.DataFrame(data)
             
-            if df.empty:
-                return df
-            
-            self.logger.info(f"Received columns for {symbol}: {df.columns.tolist()}")
-            self.logger.info(f"DataFrame shape: {df.shape}")
-            
-            # Map all columns - Hyperliquid returns: ['t', 'T', 's', 'i', 'o', 'c', 'h', 'l', 'v', 'n']
-            # Fixed column mapping to handle all 10 columns correctly
-            new_column_names = []
-            for col in df.columns:
-                if col == 't':
-                    new_column_names.append('timestamp')
-                elif col == 'T':
-                    new_column_names.append('timestamp_end')
-                elif col == 's':
-                    new_column_names.append('symbol_api')
-                elif col == 'i':
-                    new_column_names.append('interval_api')
-                elif col == 'o':
-                    new_column_names.append('open')
-                elif col == 'c':
-                    new_column_names.append('close')
-                elif col == 'h':
-                    new_column_names.append('high')
-                elif col == 'l':
-                    new_column_names.append('low')
-                elif col == 'v':
-                    new_column_names.append('volume')
-                elif col == 'n':
-                    new_column_names.append('trades')
-                else:
-                    # Keep unknown columns as-is (future-proofing)
-                    new_column_names.append(f'unknown_{col}')
-            
-            # Set new column names
-            df.columns = new_column_names
-            
-            # Convert timestamp from milliseconds to datetime
-            if 'timestamp' in df.columns:
-                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-                df = df.set_index('timestamp').sort_index()
-            
-            # Convert numeric columns
-            for col in ['open', 'high', 'low', 'close', 'volume', 'trades']:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
-            
-            # Add symbol column for identification
-            df['symbol'] = symbol
-            
-            # Keep only OHLCV columns for analysis
-            keep_cols = ['open', 'high', 'low', 'close', 'volume', 'symbol']
-            if 'trades' in df.columns:
-                keep_cols.append('trades')
-            
-            existing_cols = [col for col in keep_cols if col in df.columns]
-            df = df[existing_cols]
-            
-            self.logger.info(f"Successfully processed {len(df)} candles for {symbol}")
+            # Rename columns to standard format
+            if 't' in df.columns:
+                df = df.rename(columns={
+                    't': 'timestamp',
+                    'T': 'timestamp_close',
+                    'o': 'open',
+                    'h': 'high',
+                    'l': 'low',
+                    'c': 'close',
+                    'v': 'volume',
+                    'n': 'trades'
+                })
+                
+                # Convert timestamp to datetime
+                df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
+                
+                # Convert price columns to numeric
+                price_cols = ['open', 'high', 'low', 'close']
+                for col in price_cols:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors='coerce')
+                
+                # Convert volume to numeric
+                if 'volume' in df.columns:
+                    df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
+                
+                # Add metadata columns
+                df['symbol'] = symbol
+                df['interval'] = interval
+                
+                # Sort by timestamp and reset index
+                df = df.sort_values('timestamp').reset_index(drop=True)
+                
+                # Select final columns in logical order
+                final_cols = ['datetime', 'open', 'high', 'low', 'close', 'volume', 'symbol', 'interval']
+                if 'trades' in df.columns:
+                    final_cols.append('trades')
+                
+                df = df[final_cols]
+                
+            self.logger.info(f"Retrieved {len(df)} candles for {symbol} ({interval})")
             return df
             
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"API request failed: {e}")
+            return pd.DataFrame()
         except Exception as e:
-            self.logger.error(f"Failed to get market data for {symbol}: {e}")
+            self.logger.error(f"Error processing market data for {symbol}: {e}")
+            return pd.DataFrame()
+
+    def _get_max_lookback_hours(self, interval: str) -> int:
+        """Get maximum lookback hours for different intervals"""
+        # Hyperliquid API limits (approximate)
+        limits = {
+            '1m': 24 * 7,      # 1 week of minute data
+            '5m': 24 * 14,     # 2 weeks of 5min data  
+            '15m': 24 * 30,    # 1 month of 15min data
+            '1h': 24 * 90,     # 3 months of hourly data
+            '4h': 24 * 365,    # 1 year of 4h data
+            '1d': 24 * 365 * 3 # 3 years of daily data
+        }
+        return limits.get(interval, 24 * 30)  # Default to 30 days
+
+    def get_market_data_batch(self, symbols: List[str], interval: str = '1h', lookback_hours: int = 24) -> Dict[str, pd.DataFrame]:
+        """
+        Get market data for multiple symbols efficiently
+        
+        Args:
+            symbols: List of trading symbols
+            interval: Time interval for all symbols
+            lookback_hours: Lookback period for all symbols
+            
+        Returns:
+            Dict mapping symbol to DataFrame
+        """
+        results = {}
+        
+        for i, symbol in enumerate(symbols):
+            try:
+                self.logger.info(f"Fetching {symbol} ({i+1}/{len(symbols)})")
+                
+                df = self.get_market_data(symbol, interval, lookback_hours)
+                
+                if not df.empty:
+                    results[symbol] = df
+                    self.logger.info(f"✅ {symbol}: {len(df)} candles")
+                else:
+                    results[symbol] = pd.DataFrame()
+                    self.logger.warning(f"❌ {symbol}: No data")
+                
+                # Rate limiting
+                if i < len(symbols) - 1:
+                    time.sleep(0.5)
+                    
+            except Exception as e:
+                self.logger.error(f"Failed to get data for {symbol}: {e}")
+                results[symbol] = pd.DataFrame()
+        
+        return results
+
+    def get_market_data_range(self, symbol: str, start_date: str, end_date: str, interval: str = '1h') -> pd.DataFrame:
+        """
+        Get market data for a specific date range
+        
+        Args:
+            symbol: Trading symbol
+            start_date: Start date in 'YYYY-MM-DD' format
+            end_date: End date in 'YYYY-MM-DD' format  
+            interval: Time interval
+            
+        Returns:
+            DataFrame with market data
+        """
+        try:
+            # Parse dates
+            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+            end_dt = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)  # Include end date
+            
+            return self.get_market_data(
+                symbol=symbol,
+                interval=interval,
+                start_time=start_dt,
+                end_time=end_dt
+            )
+            
+        except ValueError as e:
+            self.logger.error(f"Invalid date format. Use YYYY-MM-DD: {e}")
             return pd.DataFrame()
     
     def collect_long_term_data(self, symbol: str, interval: str = '1d', days_back: int = 100) -> pd.DataFrame:
