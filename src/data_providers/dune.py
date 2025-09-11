@@ -3,6 +3,8 @@ Dune Analytics API Client
 """
 
 import os
+import logging
+import requests
 import time
 from typing import Dict, Optional
 import pandas as pd
@@ -97,3 +99,51 @@ class DuneProvider(BaseDataProvider):
     def get_available_queries(self) -> Dict[str, int]:
         """Get available query mappings"""
         return self.query_mappings.copy()
+
+    # Fix SQL injection vulnerability in custom_query method:
+    def custom_query(self, query: str, **kwargs) -> pd.DataFrame:
+        """
+        Execute a custom SQL query
+        
+        Args:
+            query: SQL query string (should be pre-validated)
+            **kwargs: Additional parameters
+        """
+        # Add basic SQL injection protection
+        dangerous_keywords = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'CREATE', 'TRUNCATE']
+        query_upper = query.upper()
+        
+        for keyword in dangerous_keywords:
+            if keyword in query_upper:
+                raise ValueError(f"Dangerous SQL keyword '{keyword}' not allowed in custom queries")
+        
+        try:
+            # Execute query using Dune's API
+            result = self.client.query(query, **kwargs)
+            return self._process_dune_response(result)
+        except Exception as e:
+            logger.error(f"Error executing custom query: {e}")
+            return pd.DataFrame()
+
+    # Add error handling improvement:
+    def _make_request(self, endpoint: str, params: dict = None) -> dict:
+        """Make HTTP request to Dune API with better error handling"""
+        try:
+            response = requests.get(f"{self.base_url}/{endpoint}", 
+                                headers=self.headers, 
+                                params=params,
+                                timeout=30)  # Add timeout
+            
+            if response.status_code == 429:  # Rate limit
+                logger.warning("Rate limit hit, waiting...")
+                time.sleep(60)
+                return self._make_request(endpoint, params)  # Retry
+            
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.Timeout:
+            logger.error(f"Request timeout for endpoint: {endpoint}")
+            raise
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Request failed for endpoint {endpoint}: {e}")
+            raise

@@ -448,73 +448,197 @@ class HyperliquidProvider(BaseDataProvider):
         except:
             return ['ETH', 'BTC']  # Fallback
     
-    def get_market_overview(self, top_symbols: int = 10) -> pd.DataFrame:
-        """
-        Get market overview with top symbols by volume
-        
-        Args:
-            top_symbols: Number of top symbols to include
-            
-        Returns:
-            pandas.DataFrame: Market overview data
-        """
+# Add these methods to the HyperliquidProvider class:
+
+    def get_market_overview(self, limit: int = 20) -> pd.DataFrame:
+        """Get market overview with key metrics for top tokens"""
         try:
-            # Get all available symbols
-            all_symbols = self.get_available_symbols()
-            
-            if len(all_symbols) > top_symbols:
-                # For now, take first N symbols (could be enhanced with volume sorting)
-                symbols_to_check = all_symbols[:top_symbols]
-            else:
-                symbols_to_check = all_symbols
-            
-            self.logger.info(f"Getting market overview for {len(symbols_to_check)} symbols")
+            # Get all mids and symbols
+            mids = self.get_all_mids()
+            symbols = self.get_available_symbols()
             
             overview_data = []
-            
-            for symbol in symbols_to_check:
+            for symbol in symbols[:limit]:
                 try:
-                    # Get recent data (last 24h)
-                    df = self.get_market_data(symbol, interval='1h', lookback_hours=24)
-                    
-                    if not df.empty:
-                        # Calculate 24h statistics
-                        price_24h_ago = df['close'].iloc[0] if len(df) > 0 else df['close'].iloc[-1]
-                        current_price = df['close'].iloc[-1]
-                        price_change_24h = ((current_price / price_24h_ago) - 1) * 100
-                        volume_24h = df['volume'].sum()
-                        high_24h = df['high'].max()
-                        low_24h = df['low'].min()
+                    # Get 24h data for volume and price change
+                    data_24h = self.get_market_data(symbol, '1h', lookback_hours=24)
+                    if not data_24h.empty:
+                        current_price = mids.get(symbol, 0)
+                        volume_24h = data_24h['volume'].sum()
+                        price_change_24h = ((current_price - data_24h.iloc[0]['close']) / data_24h.iloc[0]['close']) * 100
                         
                         overview_data.append({
                             'symbol': symbol,
                             'price': current_price,
-                            'price_change_24h': price_change_24h,
                             'volume_24h': volume_24h,
-                            'high_24h': high_24h,
-                            'low_24h': low_24h,
-                            'trades_24h': df['trades'].sum() if 'trades' in df.columns else 0,
-                            'timestamp': datetime.now()
+                            'price_change_24h': price_change_24h,
+                            'high_24h': data_24h['high'].max(),
+                            'low_24h': data_24h['low'].min()
                         })
-                
                 except Exception as e:
-                    self.logger.warning(f"Failed to get overview data for {symbol}: {e}")
+                    logger.warning(f"Failed to get overview for {symbol}: {e}")
                     continue
-                
-                # Rate limiting
-                time.sleep(0.1)
             
-            if overview_data:
-                overview_df = pd.DataFrame(overview_data)
-                # Sort by volume (highest first)
-                overview_df = overview_df.sort_values('volume_24h', ascending=False)
-                return overview_df
-            else:
-                return pd.DataFrame()
-                
+            return pd.DataFrame(overview_data)
         except Exception as e:
-            self.logger.error(f"Failed to get market overview: {e}")
+            logger.error(f"Error getting market overview: {e}")
             return pd.DataFrame()
+
+    def calculate_volatility(self, symbol: str, period_hours: int = 168) -> float:
+        """Calculate volatility (standard deviation of returns) for a symbol"""
+        try:
+            data = self.get_market_data(symbol, '1h', lookback_hours=period_hours)
+            if data.empty:
+                return 0.0
+            
+            # Calculate hourly returns
+            data['returns'] = data['close'].pct_change()
+            volatility = data['returns'].std() * (24 ** 0.5)  # Annualized daily volatility
+            return float(volatility)
+        except Exception as e:
+            logger.error(f"Error calculating volatility for {symbol}: {e}")
+            return 0.0
+
+    def get_price_momentum(self, symbol: str, short_period: int = 24, long_period: int = 168) -> Dict:
+        """Calculate price momentum indicators"""
+        try:
+            data = self.get_market_data(symbol, '1h', lookback_hours=long_period)
+            if data.empty or len(data) < long_period:
+                return {}
+            
+            current_price = data['close'].iloc[-1]
+            short_avg = data['close'].tail(short_period).mean()
+            long_avg = data['close'].tail(long_period).mean()
+            
+            return {
+                'symbol': symbol,
+                'current_price': current_price,
+                'sma_24h': short_avg,
+                'sma_7d': long_avg,
+                'momentum_24h': ((current_price - short_avg) / short_avg) * 100,
+                'momentum_7d': ((current_price - long_avg) / long_avg) * 100,
+                'trend': 'bullish' if short_avg > long_avg else 'bearish'
+            }
+        except Exception as e:
+            logger.error(f"Error calculating momentum for {symbol}: {e}")
+            return {}
+
+    def get_volume_analysis(self, symbol: str, period_hours: int = 168) -> Dict:
+        """Analyze volume patterns for a symbol"""
+        try:
+            data = self.get_market_data(symbol, '1h', lookback_hours=period_hours)
+            if data.empty:
+                return {}
+            
+            volume_24h = data['volume'].tail(24).sum()
+            volume_7d = data['volume'].sum()
+            avg_volume = data['volume'].mean()
+            volume_std = data['volume'].std()
+            
+            # Calculate volume spike (current vs average)
+            current_volume = data['volume'].iloc[-1]
+            volume_spike = (current_volume - avg_volume) / volume_std if volume_std > 0 else 0
+            
+            return {
+                'symbol': symbol,
+                'volume_24h': volume_24h,
+                'volume_7d': volume_7d,
+                'avg_hourly_volume': avg_volume,
+                'volume_spike_score': volume_spike,
+                'high_volume_hours': len(data[data['volume'] > (avg_volume + volume_std)])
+            }
+        except Exception as e:
+            logger.error(f"Error analyzing volume for {symbol}: {e}")
+            return {}
+
+    def get_support_resistance(self, symbol: str, period_hours: int = 168) -> Dict:
+        """Calculate basic support and resistance levels"""
+        try:
+            data = self.get_market_data(symbol, '1h', lookback_hours=period_hours)
+            if data.empty:
+                return {}
+            
+            # Simple support/resistance based on recent highs/lows
+            resistance = data['high'].quantile(0.95)
+            support = data['low'].quantile(0.05)
+            current_price = data['close'].iloc[-1]
+            
+            # Distance to support/resistance
+            resistance_distance = ((resistance - current_price) / current_price) * 100
+            support_distance = ((current_price - support) / current_price) * 100
+            
+            return {
+                'symbol': symbol,
+                'support_level': support,
+                'resistance_level': resistance,
+                'current_price': current_price,
+                'distance_to_resistance_%': resistance_distance,
+                'distance_to_support_%': support_distance,
+                'position': 'near_resistance' if resistance_distance < 5 else 'near_support' if support_distance < 5 else 'mid_range'
+            }
+        except Exception as e:
+            logger.error(f"Error calculating support/resistance for {symbol}: {e}")
+            return {}
+
+    def get_correlation_matrix(self, symbols: List[str], period_hours: int = 168) -> pd.DataFrame:
+        """Calculate correlation matrix between symbols"""
+        try:
+            price_data = {}
+            
+            for symbol in symbols:
+                data = self.get_market_data(symbol, '1h', lookback_hours=period_hours)
+                if not data.empty:
+                    # Use hourly returns for correlation
+                    returns = data['close'].pct_change().dropna()
+                    price_data[symbol] = returns
+            
+            if not price_data:
+                return pd.DataFrame()
+            
+            # Create DataFrame and calculate correlation
+            df = pd.DataFrame(price_data)
+            correlation_matrix = df.corr()
+            
+            return correlation_matrix
+        except Exception as e:
+            logger.error(f"Error calculating correlation matrix: {e}")
+            return pd.DataFrame()
+
+    def get_risk_metrics(self, symbol: str, period_hours: int = 168) -> Dict:
+        """Calculate risk metrics for a symbol"""
+        try:
+            data = self.get_market_data(symbol, '1h', lookback_hours=period_hours)
+            if data.empty:
+                return {}
+            
+            # Calculate returns
+            data['returns'] = data['close'].pct_change().dropna()
+            returns = data['returns'].dropna()
+            
+            if returns.empty:
+                return {}
+            
+            # Risk metrics
+            volatility = returns.std() * (24 ** 0.5)  # Daily volatility
+            downside_returns = returns[returns < 0]
+            downside_volatility = downside_returns.std() * (24 ** 0.5) if not downside_returns.empty else 0
+            max_drawdown = (data['close'] / data['close'].cummax() - 1).min()
+            
+            # Value at Risk (95% confidence)
+            var_95 = returns.quantile(0.05)
+            
+            return {
+                'symbol': symbol,
+                'volatility_daily': volatility,
+                'downside_volatility': downside_volatility,
+                'max_drawdown_%': max_drawdown * 100,
+                'var_95_%': var_95 * 100,
+                'sharpe_approx': returns.mean() / volatility if volatility > 0 else 0,
+                'total_return_%': ((data['close'].iloc[-1] / data['close'].iloc[0]) - 1) * 100
+            }
+        except Exception as e:
+            logger.error(f"Error calculating risk metrics for {symbol}: {e}")
+            return {}
     
     def get_comprehensive_market_data(self, symbols: List[str] = None, hours_back: int = 24) -> pd.DataFrame:
         """

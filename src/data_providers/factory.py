@@ -11,6 +11,7 @@ from .hyperliquid import HyperliquidProvider
 class DataProviderFactory:
     """Factory for creating data provider instances"""
     
+    
     _providers: Dict[str, Type[BaseDataProvider]] = {
         'dune': DuneProvider,
         'hyperliquid': HyperliquidProvider,
