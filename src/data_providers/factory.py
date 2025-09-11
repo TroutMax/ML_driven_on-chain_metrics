@@ -3,10 +3,12 @@ Data Provider Factory and Utils
 """
 
 import os
+import pandas as pd  
 from typing import Dict, List, Optional, Type
 from .base import BaseDataProvider
 from .dune import DuneProvider
 from .hyperliquid import HyperliquidProvider
+from .binance import BinanceProvider
 
 class DataProviderFactory:
     """Factory for creating data provider instances"""
@@ -15,6 +17,7 @@ class DataProviderFactory:
     _providers: Dict[str, Type[BaseDataProvider]] = {
         'dune': DuneProvider,
         'hyperliquid': HyperliquidProvider,
+        'binance': BinanceProvider,
     }
 
     @classmethod
@@ -111,6 +114,14 @@ def setup_providers() -> MultiProviderManager:
         print("✅ Hyperliquid provider initialized")
     except Exception as e:
         print(f"❌ Failed to initialize Hyperliquid provider: {e}")
+
+    # Setup Binance no API key needed for public data
+    try:
+        binance = DataProviderFactory.create_provider('binance')
+        manager.add_provider('binance', binance)
+        print("✅ Binance provider initialized")
+    except Exception as e:
+        print(f"❌ Failed to initialize Binance provider: {e}")
     
     return manager
 
@@ -146,6 +157,16 @@ def demo_usage():
         try:
             eth_data = hyperliquid.get_market_data('ETH', '1h')
             print(f"   Got {len(eth_data)} rows of ETH market data")
+        except Exception as e:
+            print(f"   Error: {e}")
+    
+    # Add Binance demo
+    binance = manager.get_provider('binance')
+    if binance:
+        print("\n💰 Fetching Binance data...")
+        try:
+            btc_data = binance.get_market_data('BTCUSDT', '1d', limit=7)
+            print(f"   Got {len(btc_data)} rows of BTC market data")
         except Exception as e:
             print(f"   Error: {e}")
     

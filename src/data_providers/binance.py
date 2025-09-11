@@ -109,8 +109,14 @@ class BinanceProvider(BaseDataProvider):
         """
         Standard market data method to match other providers
         This should be the main entry point for getting market data
+        Args:
+        symbol: Trading symbol (e.g., 'BTCUSDT')
+        interval: Time interval (default '1d')
+        **kwargs: Additional parameters like start_date, end_date, market_type, limit
         """
+        
         # Extract common parameters
+        interval = kwargs.get('interval', '1d')  # Add this line
         start_date = kwargs.get('start_date')
         end_date = kwargs.get('end_date') 
         market_type = kwargs.get('market_type', 'spot')
