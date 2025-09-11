@@ -4,7 +4,7 @@ Provides access to Binance spot and perpetual futures historical price data
 """
 
 import requests
-import pandas as pd
+import pandas as pd  
 import time
 from typing import Dict, Optional, List, Union
 from datetime import datetime, timedelta
@@ -12,10 +12,7 @@ import logging
 from .base import BaseDataProvider
 
 class BinanceProvider(BaseDataProvider):
-    """
-    Binance data provider for spot and futures historical data
-    No API key required for historical market data
-    """
+    """Standard method order"""
     
     def __init__(self, api_key: Optional[str] = None):
         # Binance doesn't require API key for public historical data
@@ -54,6 +51,90 @@ class BinanceProvider(BaseDataProvider):
             self.logger.error(f"Connection test failed: {e}")
             return False
 
+    # STANDARD INTERFACE METHODS (to match other providers)
+    def get_available_symbols(self) -> List[str]:
+        """
+        Standard method name to match other providers
+        Returns combined spot and futures symbols
+        """
+        spot_symbols = self.get_spot_symbols()
+        futures_symbols = self.get_futures_symbols()
+        
+        # Combine and deduplicate
+        all_symbols = list(set(spot_symbols + futures_symbols))
+        return sorted(all_symbols)
+
+    def get_all_mids(self) -> pd.DataFrame:
+        """
+        Get current market prices (to match Hyperliquid interface)
+        Returns 24hr ticker data for all symbols
+        """
+        try:
+            # Get 24hr ticker statistics from spot market
+            response = requests.get(f"{self.spot_base_url}/ticker/24hr", timeout=30)
+            response.raise_for_status()
+            
+            data = response.json()
+            
+            if not data:
+                return pd.DataFrame()
+            
+            # Convert to DataFrame
+            df = pd.DataFrame(data)
+            
+            # Standardize column names
+            df = df.rename(columns={
+                'symbol': 'symbol',
+                'lastPrice': 'price',
+                'volume': 'volume',
+                'priceChangePercent': 'change_24h'
+            })
+            
+            # Select relevant columns
+            cols = ['symbol', 'price', 'volume', 'change_24h']
+            df = df[cols]
+            
+            # Convert price to numeric
+            df['price'] = pd.to_numeric(df['price'], errors='coerce')
+            df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
+            df['change_24h'] = pd.to_numeric(df['change_24h'], errors='coerce')
+            
+            return df
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get market prices: {e}")
+            return pd.DataFrame()
+
+    def get_market_data(self, symbol: str, **kwargs) -> pd.DataFrame:
+        """
+        Standard market data method to match other providers
+        This should be the main entry point for getting market data
+        """
+        # Extract common parameters
+        start_date = kwargs.get('start_date')
+        end_date = kwargs.get('end_date') 
+        market_type = kwargs.get('market_type', 'spot')
+        limit = kwargs.get('limit', 1000)
+        
+        if start_date:
+            # Use long-term data collection for date ranges
+            return self.get_long_term_data(
+                symbol=symbol,
+                interval=interval,
+                start_date=start_date,
+                end_date=end_date,
+                market_type=market_type
+            )
+        else:
+            # Use direct klines for recent data
+            return self.get_historical_klines(
+                symbol=symbol,
+                interval=interval,
+                limit=limit,
+                market_type=market_type
+            )
+
+    # BINANCE-SPECIFIC METHODS
     def get_spot_symbols(self, refresh: bool = False) -> List[str]:
         """
         Get all available spot trading symbols
